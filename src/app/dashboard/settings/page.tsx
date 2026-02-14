@@ -196,7 +196,7 @@ export default function SettingsPage() {
             </CardHeader>
             <CardContent>
               <p className="text-sm text-muted-foreground">
-                Organization settings will be available here.
+                Organization settings coming soon.
               </p>
             </CardContent>
           </Card>
@@ -212,7 +212,7 @@ export default function SettingsPage() {
             </CardHeader>
             <CardContent>
               <p className="text-sm text-muted-foreground">
-                Team management will be available here.
+                Team management coming soon.
               </p>
             </CardContent>
           </Card>

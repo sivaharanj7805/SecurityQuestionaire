@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { chunks, documents } from "@/lib/db/schema";
+import { chunks, documents, answerLibrary } from "@/lib/db/schema";
 import { eq, and, sql, gt } from "drizzle-orm";
 import { generateEmbeddings } from "./embed";
 import { truncateForEmbedding } from "@/lib/ai/sanitize";
@@ -72,8 +72,6 @@ export async function retrieveFromAnswerLibrary(
 
   const queryEmbedding = embeddings[0];
   const embeddingStr = `[${queryEmbedding.join(",")}]`;
-
-  const { answerLibrary } = await import("@/lib/db/schema");
 
   const results = await db
     .select({

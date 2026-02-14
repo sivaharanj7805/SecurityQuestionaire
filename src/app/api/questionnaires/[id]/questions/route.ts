@@ -3,7 +3,7 @@ import { auth } from "@clerk/nextjs/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { questions, questionnaires } from "@/lib/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 
 const VALID_QUESTION_STATUSES = ["draft", "approved", "rejected", "skipped"] as const;
 const VALID_CONFIDENCE_LEVELS = ["high", "medium", "low", "none"] as const;
@@ -113,18 +113,16 @@ export async function PATCH(
 
       const { questionIds, status } = validation.data;
 
-      for (const qId of questionIds) {
-        await db
-          .update(questions)
-          .set({ status, updatedAt: new Date() })
-          .where(
-            and(
-              eq(questions.id, qId),
-              eq(questions.questionnaireId, questionnaireId),
-              eq(questions.orgId, orgId)
-            )
-          );
-      }
+      await db
+        .update(questions)
+        .set({ status, updatedAt: new Date() })
+        .where(
+          and(
+            inArray(questions.id, questionIds),
+            eq(questions.questionnaireId, questionnaireId),
+            eq(questions.orgId, orgId)
+          )
+        );
 
       // Update questionnaire status if all resolved
       const allQuestions = await db

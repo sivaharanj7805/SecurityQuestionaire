@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { documents, questionnaires, users, organizations } from "@/lib/db/schema";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { getPlanDetails } from "./plans";
 
 export interface UsageData {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Upload, FileText, X, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Progress } from "@/components/ui/progress";
@@ -15,14 +15,17 @@ const ACCEPTED_TYPES = [
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
+let uploadIdCounter = 0;
+
 interface UploadDropzoneProps {
   onUploadComplete: () => void;
 }
 
 interface UploadingFile {
+  id: string;
   file: File;
   progress: number;
-  status: "uploading" | "complete" | "error";
+  status: "uploading" | "ingesting" | "complete" | "error";
   error?: string;
 }
 
@@ -30,6 +33,8 @@ export function UploadDropzone({ onUploadComplete }: UploadDropzoneProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [uploads, setUploads] = useState<UploadingFile[]>([]);
   const { toast } = useToast();
+  const uploadsRef = useRef(uploads);
+  uploadsRef.current = uploads;
 
   const validateFile = useCallback(
     (file: File): string | null => {
@@ -44,6 +49,15 @@ export function UploadDropzone({ onUploadComplete }: UploadDropzoneProps) {
     []
   );
 
+  const updateUpload = useCallback(
+    (uploadId: string, updates: Partial<UploadingFile>) => {
+      setUploads((prev) =>
+        prev.map((u) => (u.id === uploadId ? { ...u, ...updates } : u))
+      );
+    },
+    []
+  );
+
   const uploadFile = useCallback(
     async (file: File) => {
       const error = validateFile(file);
@@ -52,14 +66,15 @@ export function UploadDropzone({ onUploadComplete }: UploadDropzoneProps) {
         return;
       }
 
+      const uploadId = `upload-${++uploadIdCounter}`;
       const uploadEntry: UploadingFile = {
+        id: uploadId,
         file,
         progress: 0,
         status: "uploading",
       };
 
       setUploads((prev) => [...prev, uploadEntry]);
-      const index = uploads.length;
 
       try {
         const formData = new FormData();
@@ -67,31 +82,29 @@ export function UploadDropzone({ onUploadComplete }: UploadDropzoneProps) {
 
         const xhr = new XMLHttpRequest();
 
-        await new Promise<void>((resolve, reject) => {
+        const responseData = await new Promise<{ id: string }>((resolve, reject) => {
           xhr.upload.addEventListener("progress", (event) => {
             if (event.lengthComputable) {
               const percent = Math.round((event.loaded / event.total) * 100);
-              setUploads((prev) =>
-                prev.map((u, i) =>
-                  i === index ? { ...u, progress: percent } : u
-                )
-              );
+              updateUpload(uploadId, { progress: percent });
             }
           });
 
           xhr.addEventListener("load", () => {
             if (xhr.status >= 200 && xhr.status < 300) {
-              setUploads((prev) =>
-                prev.map((u, i) =>
-                  i === index
-                    ? { ...u, progress: 100, status: "complete" }
-                    : u
-                )
-              );
-              resolve();
+              updateUpload(uploadId, { progress: 100 });
+              try {
+                resolve(JSON.parse(xhr.responseText));
+              } catch {
+                resolve({ id: "" });
+              }
             } else {
-              const body = JSON.parse(xhr.responseText);
-              reject(new Error(body.error || "Upload failed"));
+              try {
+                const body = JSON.parse(xhr.responseText);
+                reject(new Error(body.error || "Upload failed"));
+              } catch {
+                reject(new Error(`Upload failed with status ${xhr.status}`));
+              }
             }
           });
 
@@ -103,19 +116,32 @@ export function UploadDropzone({ onUploadComplete }: UploadDropzoneProps) {
           xhr.send(formData);
         });
 
+        // Trigger ingestion as a separate synchronous request
+        if (responseData.id) {
+          updateUpload(uploadId, { status: "ingesting" });
+          const ingestRes = await fetch("/api/ingest", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ documentId: responseData.id }),
+          });
+
+          if (!ingestRes.ok) {
+            const ingestData = await ingestRes.json().catch(() => ({}));
+            console.error("Ingestion failed:", ingestData.error);
+            // Don't fail the upload, just log it — the document can be reprocessed
+          }
+        }
+
+        updateUpload(uploadId, { status: "complete", progress: 100 });
         toast({
           title: "Upload successful",
-          description: `${file.name} has been uploaded.`,
+          description: `${file.name} has been uploaded and processed.`,
         });
         onUploadComplete();
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "Upload failed";
-        setUploads((prev) =>
-          prev.map((u, i) =>
-            i === index ? { ...u, status: "error", error: message } : u
-          )
-        );
+        updateUpload(uploadId, { status: "error", error: message });
         toast({
           title: "Upload failed",
           description: message,
@@ -123,7 +149,7 @@ export function UploadDropzone({ onUploadComplete }: UploadDropzoneProps) {
         });
       }
     },
-    [uploads.length, validateFile, toast, onUploadComplete]
+    [validateFile, toast, onUploadComplete, updateUpload]
   );
 
   const handleDrop = useCallback(
@@ -145,8 +171,8 @@ export function UploadDropzone({ onUploadComplete }: UploadDropzoneProps) {
     [uploadFile]
   );
 
-  const removeUpload = useCallback((index: number) => {
-    setUploads((prev) => prev.filter((_, i) => i !== index));
+  const removeUpload = useCallback((uploadId: string) => {
+    setUploads((prev) => prev.filter((u) => u.id !== uploadId));
   }, []);
 
   return (
@@ -190,9 +216,9 @@ export function UploadDropzone({ onUploadComplete }: UploadDropzoneProps) {
 
       {uploads.length > 0 && (
         <div className="space-y-2">
-          {uploads.map((upload, index) => (
+          {uploads.map((upload) => (
             <div
-              key={`${upload.file.name}-${index}`}
+              key={upload.id}
               className="flex items-center gap-3 rounded-lg border p-3"
             >
               <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
@@ -202,6 +228,11 @@ export function UploadDropzone({ onUploadComplete }: UploadDropzoneProps) {
                 </p>
                 {upload.status === "uploading" && (
                   <Progress value={upload.progress} className="mt-1" />
+                )}
+                {upload.status === "ingesting" && (
+                  <p className="mt-1 text-xs text-blue-600">
+                    Processing document...
+                  </p>
                 )}
                 {upload.status === "error" && (
                   <p className="mt-1 flex items-center gap-1 text-xs text-destructive">
@@ -219,7 +250,7 @@ export function UploadDropzone({ onUploadComplete }: UploadDropzoneProps) {
                 variant="ghost"
                 size="icon"
                 className="h-6 w-6 shrink-0"
-                onClick={() => removeUpload(index)}
+                onClick={() => removeUpload(upload.id)}
               >
                 <X className="h-4 w-4" />
               </Button>

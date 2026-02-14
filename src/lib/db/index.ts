@@ -1,10 +1,14 @@
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import * as schema from "./schema";
+import { validateEnv } from "@/lib/env";
 
 let _db: ReturnType<typeof drizzle<typeof schema>> | null = null;
 
 function createDb() {
+  // Validate all environment variables on first DB access
+  validateEnv();
+
   const connectionString = process.env.DATABASE_URL;
 
   if (!connectionString) {
@@ -28,6 +32,6 @@ export const db = new Proxy({} as ReturnType<typeof drizzle<typeof schema>>, {
     if (!_db) {
       _db = createDb();
     }
-    return (_db as Record<string | symbol, unknown>)[prop];
+    return (_db as unknown as Record<string | symbol, unknown>)[prop];
   },
 });

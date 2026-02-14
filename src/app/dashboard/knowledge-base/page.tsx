@@ -28,7 +28,7 @@ export default function KnowledgeBasePage() {
         setDocuments(data);
       }
     } catch {
-      // silently fail on fetch — documents will show as empty
+      console.error("Failed to fetch documents");
     } finally {
       setIsLoading(false);
     }

@@ -3,9 +3,10 @@ import { auth } from "@clerk/nextjs/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { questions, questionnaires } from "@/lib/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { generateAnswer } from "@/lib/rag/generate";
-import { rateLimit, rateLimitHeaders } from "@/lib/rate-limit";
+
+const BATCH_SIZE = 10;
 
 const processSchema = z.object({
   questionnaireId: z.string().uuid(),
@@ -18,14 +19,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Rate limit: 5 process requests per minute per org
-    const rl = rateLimit(`process:${orgId}`, { maxRequests: 5, windowMs: 60_000 });
-    if (!rl.success) {
-      return NextResponse.json(
-        { error: "Too many processing requests. Please try again later." },
-        { status: 429, headers: rateLimitHeaders(rl) }
-      );
-    }
+    // TODO: Add Upstash Redis rate limiting here (5 req/min per org)
 
     const body = await request.json();
     const validation = processSchema.safeParse(body);
@@ -56,23 +50,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Prevent re-processing if already processing
-    if (questionnaire.status === "processing") {
-      return NextResponse.json(
-        { error: "Questionnaire is already being processed." },
-        { status: 409 }
-      );
-    }
-
-    // Set status to processing
-    await db
-      .update(questionnaires)
-      .set({ status: "processing", completedCount: 0 })
-      .where(and(eq(questionnaires.id, questionnaireId), eq(questionnaires.orgId, orgId)));
-
-    // Get all questions
-    const questionList = await db
+    // Get unprocessed questions (aiAnswer is null)
+    const unprocessedQuestions = await db
       .select()
+      .from(questions)
+      .where(
+        and(
+          eq(questions.questionnaireId, questionnaireId),
+          eq(questions.orgId, orgId),
+          isNull(questions.aiAnswer)
+        )
+      )
+      .limit(BATCH_SIZE);
+
+    // Get total counts for progress tracking
+    const allQuestions = await db
+      .select({ id: questions.id, aiAnswer: questions.aiAnswer })
       .from(questions)
       .where(
         and(
@@ -81,47 +74,41 @@ export async function POST(request: NextRequest) {
         )
       );
 
-    // Process in background — return immediately
-    processQuestions(orgId, questionnaireId, questionList).catch((err) => {
-      console.error(`Batch processing failed for ${questionnaireId}:`, err);
-    });
+    const total = allQuestions.length;
+    const alreadyProcessed = allQuestions.filter((q) => q.aiAnswer !== null).length;
 
-    return NextResponse.json({
-      success: true,
-      total: questionList.length,
-      message: "Processing started",
-    });
-  } catch (error) {
-    console.error("Process error:", error);
-    return NextResponse.json(
-      { error: "Failed to start processing" },
-      { status: 500 }
-    );
-  }
-}
+    // If this is the first batch, set status to processing
+    if (questionnaire.status !== "processing" && unprocessedQuestions.length > 0) {
+      await db
+        .update(questionnaires)
+        .set({ status: "processing", completedCount: alreadyProcessed })
+        .where(and(eq(questionnaires.id, questionnaireId), eq(questionnaires.orgId, orgId)));
+    }
 
-interface QuestionRecord {
-  id: string;
-  questionText: string;
-  answerFormat: "freetext" | "yes_no" | "multiple_choice";
-}
+    // If nothing left to process, mark as complete
+    if (unprocessedQuestions.length === 0) {
+      await db
+        .update(questionnaires)
+        .set({ status: "draft", completedCount: total })
+        .where(and(eq(questionnaires.id, questionnaireId), eq(questionnaires.orgId, orgId)));
 
-async function processQuestions(
-  orgId: string,
-  questionnaireId: string,
-  questionList: QuestionRecord[]
-) {
-  let completed = 0;
-  let totalCost = 0;
-  let hadErrors = false;
+      return NextResponse.json({
+        success: true,
+        processed: 0,
+        completed: total,
+        total,
+        done: true,
+      });
+    }
 
-  try {
-    for (const question of questionList) {
+    // Process this batch synchronously
+    let batchProcessed = 0;
+    for (const question of unprocessedQuestions) {
       try {
         const result = await generateAnswer(
           orgId,
           question.questionText,
-          question.answerFormat
+          question.answerFormat as "freetext" | "yes_no" | "multiple_choice"
         );
 
         await db
@@ -134,16 +121,9 @@ async function processQuestions(
             updatedAt: new Date(),
           })
           .where(and(eq(questions.id, question.id), eq(questions.orgId, orgId)));
-
-        totalCost += result.cost;
       } catch (err) {
-        console.error(
-          `Failed to process question ${question.id}:`,
-          err
-        );
-        hadErrors = true;
+        console.error(`Failed to process question ${question.id}:`, err);
 
-        // Don't fail the entire batch
         await db
           .update(questions)
           .set({
@@ -155,37 +135,38 @@ async function processQuestions(
           .where(and(eq(questions.id, question.id), eq(questions.orgId, orgId)));
       }
 
-      completed++;
+      batchProcessed++;
 
-      // Update progress
+      // Update progress counter
       await db
         .update(questionnaires)
-        .set({ completedCount: completed })
+        .set({ completedCount: alreadyProcessed + batchProcessed })
         .where(and(eq(questionnaires.id, questionnaireId), eq(questionnaires.orgId, orgId)));
     }
 
-    // Mark questionnaire as draft (ready for review)
-    await db
-      .update(questionnaires)
-      .set({
-        status: "draft",
-        completedCount: completed,
-      })
-      .where(and(eq(questionnaires.id, questionnaireId), eq(questionnaires.orgId, orgId)));
-  } catch (fatalError) {
-    // If the entire batch processing fails (e.g., DB connection lost),
-    // update status so the UI doesn't show "processing" forever
-    console.error(`Fatal batch processing error for ${questionnaireId}:`, fatalError);
-    try {
+    const newCompleted = alreadyProcessed + batchProcessed;
+    const done = newCompleted >= total;
+
+    // If all questions processed, mark questionnaire as draft (ready for review)
+    if (done) {
       await db
         .update(questionnaires)
-        .set({
-          status: "draft",
-          completedCount: completed,
-        })
+        .set({ status: "draft", completedCount: total })
         .where(and(eq(questionnaires.id, questionnaireId), eq(questionnaires.orgId, orgId)));
-    } catch (updateErr) {
-      console.error(`Failed to update questionnaire status after fatal error:`, updateErr);
     }
+
+    return NextResponse.json({
+      success: true,
+      processed: batchProcessed,
+      completed: newCompleted,
+      total,
+      done,
+    });
+  } catch (error) {
+    console.error("Process error:", error);
+    return NextResponse.json(
+      { error: "Failed to process questions" },
+      { status: 500 }
+    );
   }
 }

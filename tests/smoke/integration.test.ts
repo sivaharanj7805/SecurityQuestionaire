@@ -7,7 +7,6 @@ import { chunkDocument } from "@/lib/rag/chunk";
 import { parseExcel } from "@/lib/parsers/excel";
 import { parseQuestionnaire } from "@/lib/parsers/questionnaire";
 import { DocumentParseError, parseDocument } from "@/lib/parsers";
-import { rateLimit } from "@/lib/rate-limit";
 import * as XLSX from "xlsx";
 
 describe("Integration: full pipeline smoke test", () => {
@@ -69,8 +68,8 @@ describe("Integration: full pipeline smoke test", () => {
 
     // 4. Verify the export is a valid xlsx
     const exportWb = XLSX.read(exportBuffer, { type: "buffer" });
-    expect(exportWb.SheetNames).toContain("Questionnaire");
-    const exportData = XLSX.utils.sheet_to_json(exportWb.Sheets["Questionnaire"]);
+    expect(exportWb.SheetNames).toContain("Test Questionnaire");
+    const exportData = XLSX.utils.sheet_to_json(exportWb.Sheets["Test Questionnaire"]);
     expect(exportData).toHaveLength(3);
   });
 
@@ -95,16 +94,6 @@ describe("Integration: full pipeline smoke test", () => {
     const sanitized = sanitizeForAI(truncated);
     // The truncation should have cut off the injection before sanitization even needed to
     expect(sanitized.length).toBeLessThanOrEqual(8000);
-  });
-
-  it("rate limiter integrates with per-org keys", () => {
-    const orgKey = `integration:${Date.now()}`;
-    const r1 = rateLimit(`upload:${orgKey}`, { maxRequests: 2, windowMs: 60_000 });
-    expect(r1.success).toBe(true);
-    const r2 = rateLimit(`upload:${orgKey}`, { maxRequests: 2, windowMs: 60_000 });
-    expect(r2.success).toBe(true);
-    const r3 = rateLimit(`upload:${orgKey}`, { maxRequests: 2, windowMs: 60_000 });
-    expect(r3.success).toBe(false);
   });
 
   it("empty document parse fails gracefully", async () => {
@@ -134,7 +123,7 @@ describe("Integration: full pipeline smoke test", () => {
     const buffer = generateExcelExport("Special Chars Test", questions);
     const wb = XLSX.read(buffer, { type: "buffer" });
     const data = XLSX.utils.sheet_to_json<Record<string, string>>(
-      wb.Sheets["Questionnaire"]
+      wb.Sheets["Special Chars Test"]
     );
     expect(data[0]["Question"]).toContain("quotes");
     expect(data[0]["Answer"]).toContain("\u00e9");

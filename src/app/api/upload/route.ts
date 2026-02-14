@@ -4,10 +4,8 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { documents } from "@/lib/db/schema";
 import { uploadFile } from "@/lib/storage/r2";
-import { ingestDocument } from "@/lib/rag/ingest";
 import { enforceLimit, PlanLimitError } from "@/lib/billing/enforce";
 import { logAudit } from "@/lib/audit";
-import { rateLimit, rateLimitHeaders } from "@/lib/rate-limit";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -72,14 +70,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Rate limit: 20 uploads per minute per org
-    const rl = rateLimit(`upload:${orgId}`, { maxRequests: 20, windowMs: 60_000 });
-    if (!rl.success) {
-      return NextResponse.json(
-        { error: "Too many uploads. Please try again later." },
-        { status: 429, headers: rateLimitHeaders(rl) }
-      );
-    }
+    // TODO: Add Upstash Redis rate limiting here (20 uploads/min per org)
 
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
@@ -167,11 +158,9 @@ export async function POST(request: NextRequest) {
       details: { filename: sanitizedFilename, fileType: resolvedType, fileSize },
     });
 
-    // Fire-and-forget ingestion — don't block the upload response
-    ingestDocument(orgId, document.id).catch((err) => {
-      console.error(`Background ingestion failed for ${document.id}:`, err);
-    });
-
+    // Return document ID immediately. The frontend calls POST /api/ingest
+    // with { documentId } to trigger ingestion as a separate request
+    // (runs synchronously within the 60s serverless timeout).
     return NextResponse.json({
       id: document.id,
       filename: document.filename,

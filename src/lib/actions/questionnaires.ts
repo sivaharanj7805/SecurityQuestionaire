@@ -125,25 +125,26 @@ export async function deleteQuestionnaire(questionnaireId: string) {
   const { orgId } = await auth();
   if (!orgId) throw new Error("No organization selected");
 
-  // Delete questions first
-  await db
-    .delete(questions)
-    .where(
-      and(
-        eq(questions.questionnaireId, questionnaireId),
-        eq(questions.orgId, orgId)
-      )
-    );
+  // Delete questions + questionnaire in a transaction
+  await db.transaction(async (tx) => {
+    await tx
+      .delete(questions)
+      .where(
+        and(
+          eq(questions.questionnaireId, questionnaireId),
+          eq(questions.orgId, orgId)
+        )
+      );
 
-  // Delete questionnaire
-  await db
-    .delete(questionnaires)
-    .where(
-      and(
-        eq(questionnaires.id, questionnaireId),
-        eq(questionnaires.orgId, orgId)
-      )
-    );
+    await tx
+      .delete(questionnaires)
+      .where(
+        and(
+          eq(questionnaires.id, questionnaireId),
+          eq(questionnaires.orgId, orgId)
+        )
+      );
+  });
 
   return { success: true };
 }

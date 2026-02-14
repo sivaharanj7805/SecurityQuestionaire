@@ -54,7 +54,7 @@ export default function DashboardPage() {
           setStats(await res.json());
         }
       } catch {
-        // silently fail, keep defaults
+        console.error("Failed to fetch dashboard stats");
       }
     }
     fetchStats();

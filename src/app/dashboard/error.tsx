@@ -7,6 +7,7 @@ export default function DashboardError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  console.error("Dashboard error:", error);
   return (
     <div className="flex min-h-[50vh] flex-col items-center justify-center gap-4">
       <h2 className="text-2xl font-semibold">Something went wrong</h2>

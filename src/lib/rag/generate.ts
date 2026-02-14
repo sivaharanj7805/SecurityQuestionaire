@@ -26,13 +26,22 @@ function selectModel(answerFormat: AnswerFormat): ModelTier {
   return "sonnet";
 }
 
+const companyNameCache = new Map<string, { name: string; expiresAt: number }>();
+
 async function getCompanyName(orgId: string): Promise<string> {
+  const cached = companyNameCache.get(orgId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.name;
+  }
+
   const [org] = await db
     .select({ name: organizations.name })
     .from(organizations)
     .where(eq(organizations.clerkOrgId, orgId));
 
-  return org?.name ?? "Our Company";
+  const name = org?.name ?? "Our Company";
+  companyNameCache.set(orgId, { name, expiresAt: Date.now() + 5 * 60 * 1000 });
+  return name;
 }
 
 export async function generateAnswer(

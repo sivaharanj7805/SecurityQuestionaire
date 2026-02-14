@@ -52,22 +52,23 @@ export async function DELETE(
 
     const { id } = await params;
 
-    // Delete questions first
-    await db
-      .delete(questions)
-      .where(
-        and(
-          eq(questions.questionnaireId, id),
-          eq(questions.orgId, orgId)
-        )
-      );
+    // Delete questions + questionnaire in a transaction
+    await db.transaction(async (tx) => {
+      await tx
+        .delete(questions)
+        .where(
+          and(
+            eq(questions.questionnaireId, id),
+            eq(questions.orgId, orgId)
+          )
+        );
 
-    // Delete questionnaire
-    await db
-      .delete(questionnaires)
-      .where(
-        and(eq(questionnaires.id, id), eq(questionnaires.orgId, orgId))
-      );
+      await tx
+        .delete(questionnaires)
+        .where(
+          and(eq(questionnaires.id, id), eq(questionnaires.orgId, orgId))
+        );
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {

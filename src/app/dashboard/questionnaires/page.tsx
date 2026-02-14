@@ -96,7 +96,7 @@ export default function QuestionnairesPage() {
         setQuestionnaires(await res.json());
       }
     } catch {
-      // silently fail
+      console.error("Failed to fetch questionnaires");
     } finally {
       setIsLoading(false);
     }
