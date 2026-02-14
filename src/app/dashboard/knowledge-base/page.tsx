@@ -38,6 +38,15 @@ export default function KnowledgeBasePage() {
     fetchDocuments();
   }, [fetchDocuments]);
 
+  // Poll for status changes when documents are processing
+  useEffect(() => {
+    const hasProcessing = documents.some((d) => d.status === "processing");
+    if (!hasProcessing) return;
+
+    const interval = setInterval(fetchDocuments, 5000);
+    return () => clearInterval(interval);
+  }, [documents, fetchDocuments]);
+
   return (
     <div className="space-y-6">
       <div>

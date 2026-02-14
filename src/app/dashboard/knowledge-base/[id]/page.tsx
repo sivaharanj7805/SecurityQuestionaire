@@ -94,6 +94,7 @@ export default function DocumentDetailPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isReprocessing, setIsReprocessing] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
 
   const fetchDocument = useCallback(async () => {
@@ -143,6 +144,47 @@ export default function DocumentDetailPage() {
   useEffect(() => {
     fetchChunks(currentPage);
   }, [fetchChunks, currentPage]);
+
+  // Poll while processing
+  useEffect(() => {
+    if (document?.status !== "processing") return;
+
+    const interval = setInterval(() => {
+      fetchDocument();
+      fetchChunks(currentPage);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [document?.status, fetchDocument, fetchChunks, currentPage]);
+
+  async function handleReprocess() {
+    setIsReprocessing(true);
+    try {
+      const res = await fetch("/api/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ documentId: params.id }),
+      });
+      if (res.ok) {
+        toast({
+          title: "Re-processing started",
+          description: "Document has been queued for re-processing.",
+        });
+        fetchDocument();
+      } else {
+        const data = await res.json();
+        throw new Error(data.error || "Re-processing failed");
+      }
+    } catch (err) {
+      toast({
+        title: "Re-processing failed",
+        description:
+          err instanceof Error ? err.message : "Could not re-process.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsReprocessing(false);
+    }
+  }
 
   async function handleDelete() {
     setIsDeleting(true);
@@ -209,15 +251,11 @@ export default function DocumentDetailPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => {
-              toast({
-                title: "Re-processing",
-                description: "Document has been queued for re-processing.",
-              });
-            }}
+            onClick={handleReprocess}
+            disabled={isReprocessing || document.status === "processing"}
           >
             <RefreshCw className="mr-2 h-4 w-4" />
-            Re-process
+            {isReprocessing ? "Re-processing..." : "Re-process"}
           </Button>
           <Button
             variant="destructive"

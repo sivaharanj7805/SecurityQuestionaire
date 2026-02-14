@@ -4,6 +4,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { documents } from "@/lib/db/schema";
 import { uploadFile } from "@/lib/storage/r2";
+import { ingestDocument } from "@/lib/rag/ingest";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -76,6 +77,11 @@ export async function POST(request: NextRequest) {
         uploadedBy: userId,
       })
       .returning();
+
+    // Fire-and-forget ingestion — don't block the upload response
+    ingestDocument(orgId, document.id).catch((err) => {
+      console.error(`Background ingestion failed for ${document.id}:`, err);
+    });
 
     return NextResponse.json({
       id: document.id,
