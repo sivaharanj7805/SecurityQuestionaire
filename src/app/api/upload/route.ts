@@ -7,6 +7,7 @@ import { uploadFile } from "@/lib/storage/r2";
 import { ingestDocument } from "@/lib/rag/ingest";
 import { enforceLimit, PlanLimitError } from "@/lib/billing/enforce";
 import { logAudit } from "@/lib/audit";
+import { rateLimit, rateLimitHeaders } from "@/lib/rate-limit";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -68,6 +69,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: "Unauthorized. Please sign in and select an organization." },
         { status: 401 }
+      );
+    }
+
+    // Rate limit: 20 uploads per minute per org
+    const rl = rateLimit(`upload:${orgId}`, { maxRequests: 20, windowMs: 60_000 });
+    if (!rl.success) {
+      return NextResponse.json(
+        { error: "Too many uploads. Please try again later." },
+        { status: 429, headers: rateLimitHeaders(rl) }
       );
     }
 

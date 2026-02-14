@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getStripeInstance } from "@/lib/billing/stripe";
 import { db } from "@/lib/db";
-import { organizations } from "@/lib/db/schema";
+import { organizations, stripeEvents } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import type Stripe from "stripe";
 
@@ -34,6 +34,36 @@ async function updateOrgPlan(
     .where(eq(organizations.stripeCustomerId, customerId));
 }
 
+/**
+ * Check if this event was already processed (idempotency guard).
+ * Returns true if the event is a duplicate.
+ */
+async function isDuplicateEvent(eventId: string): Promise<boolean> {
+  try {
+    const [existing] = await db
+      .select({ id: stripeEvents.id })
+      .from(stripeEvents)
+      .where(eq(stripeEvents.id, eventId));
+
+    return !!existing;
+  } catch {
+    // If the table doesn't exist yet (before migration), skip the check
+    return false;
+  }
+}
+
+async function markEventProcessed(eventId: string, eventType: string): Promise<void> {
+  try {
+    await db
+      .insert(stripeEvents)
+      .values({ id: eventId, type: eventType })
+      .onConflictDoNothing();
+  } catch {
+    // Non-critical — log and continue
+    console.warn(`Failed to record stripe event ${eventId}`);
+  }
+}
+
 export async function POST(request: NextRequest) {
   const body = await request.text();
   const signature = request.headers.get("stripe-signature");
@@ -58,6 +88,11 @@ export async function POST(request: NextRequest) {
       { error: "Invalid signature" },
       { status: 400 }
     );
+  }
+
+  // Idempotency check — skip duplicate events
+  if (await isDuplicateEvent(event.id)) {
+    return NextResponse.json({ received: true, duplicate: true });
   }
 
   try {
@@ -107,6 +142,9 @@ export async function POST(request: NextRequest) {
         break;
       }
     }
+
+    // Record this event as processed
+    await markEventProcessed(event.id, event.type);
 
     return NextResponse.json({ received: true });
   } catch (error) {

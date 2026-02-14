@@ -241,6 +241,18 @@ export const usageLogs = pgTable(
   ]
 );
 
+export const stripeEvents = pgTable(
+  "stripe_events",
+  {
+    id: text("id").primaryKey(), // Stripe event ID (evt_xxx)
+    type: text("type").notNull(),
+    processedAt: timestamp("processed_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("stripe_events_processed_at_idx").on(table.processedAt),
+  ]
+);
+
 export const auditLogs = pgTable(
   "audit_logs",
   {
