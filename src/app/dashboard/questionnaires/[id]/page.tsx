@@ -9,6 +9,9 @@ import {
   CheckCheck,
   ChevronDown,
   ChevronUp,
+  Download,
+  FileSpreadsheet,
+  FileText,
   Filter,
   LibraryBig,
   RefreshCw,
@@ -424,6 +427,43 @@ export default function ReviewPage() {
   const approvedCount = questionsList.filter((q) => q.status === "approved").length;
   const reviewedCount = questionsList.filter((q) => q.status !== "draft").length;
   const progressPct = totalQuestions > 0 ? Math.round((reviewedCount / totalQuestions) * 100) : 0;
+  const allDraftCount = questionsList.filter((q) => q.status === "draft").length;
+
+  async function handleExport(format: "xlsx" | "docx") {
+    try {
+      const res = await fetch(
+        `/api/questionnaires/${questionnaireId}/export?format=${format}`
+      );
+      if (!res.ok) {
+        const data = await res.json();
+        toast({
+          title: "Export failed",
+          description: data.error ?? "Something went wrong.",
+          variant: "destructive",
+        });
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const disposition = res.headers.get("Content-Disposition") ?? "";
+      const match = disposition.match(/filename="(.+)"/);
+      a.download = match?.[1] ?? `export.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast({ title: "Export downloaded successfully" });
+      await fetchData();
+    } catch {
+      toast({
+        title: "Export failed",
+        description: "Could not generate export.",
+        variant: "destructive",
+      });
+    }
+  }
 
   if (isLoading) {
     return (
@@ -504,17 +544,28 @@ export default function ReviewPage() {
             </DropdownMenu>
           )}
 
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              router.push(
-                `/api/questionnaires/${questionnaireId}/export`
-              );
-            }}
-          >
-            Export
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={allDraftCount > 0}
+              >
+                <Download className="mr-1 h-3.5 w-3.5" />
+                Export
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent>
+              <DropdownMenuItem onClick={() => handleExport("xlsx")}>
+                <FileSpreadsheet className="mr-2 h-4 w-4" />
+                Export as Excel (.xlsx)
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleExport("docx")}>
+                <FileText className="mr-2 h-4 w-4" />
+                Export as Word (.docx)
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
