@@ -7,7 +7,9 @@ import {
   integer,
   jsonb,
   index,
+  uniqueIndex,
   vector,
+  numeric,
 } from "drizzle-orm/pg-core";
 
 // Enums
@@ -66,6 +68,7 @@ export const organizations = pgTable("organizations", {
   stripeCustomerId: text("stripe_customer_id"),
   plan: planEnum("plan").default("free").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
 });
 
 export const users = pgTable(
@@ -80,7 +83,11 @@ export const users = pgTable(
     role: userRoleEnum("role").default("member").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
   },
-  (table) => [index("users_org_id_idx").on(table.orgId)]
+  (table) => [
+    index("users_org_id_idx").on(table.orgId),
+    index("users_clerk_user_id_idx").on(table.clerkUserId),
+    uniqueIndex("users_org_email_idx").on(table.orgId, table.email),
+  ]
 );
 
 export const documents = pgTable(
@@ -96,12 +103,18 @@ export const documents = pgTable(
     fileSize: integer("file_size").notNull(),
     status: documentStatusEnum("status").default("processing").notNull(),
     pageCount: integer("page_count"),
+    chunkCount: integer("chunk_count").default(0).notNull(),
+    errorMessage: text("error_message"),
     uploadedBy: uuid("uploaded_by")
       .references(() => users.id)
       .notNull(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
   },
-  (table) => [index("documents_org_id_idx").on(table.orgId)]
+  (table) => [
+    index("documents_org_id_idx").on(table.orgId),
+    index("documents_org_status_idx").on(table.orgId, table.status),
+    index("documents_org_created_idx").on(table.orgId, table.createdAt),
+  ]
 );
 
 export const chunks = pgTable(
@@ -122,6 +135,8 @@ export const chunks = pgTable(
   },
   (table) => [
     index("chunks_org_id_idx").on(table.orgId),
+    index("chunks_document_id_idx").on(table.documentId),
+    index("chunks_org_document_idx").on(table.orgId, table.documentId),
     index("chunks_embedding_idx")
       .using("hnsw", table.embedding.op("vector_cosine_ops")),
   ]
@@ -144,7 +159,11 @@ export const questionnaires = pgTable(
       .notNull(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
   },
-  (table) => [index("questionnaires_org_id_idx").on(table.orgId)]
+  (table) => [
+    index("questionnaires_org_id_idx").on(table.orgId),
+    index("questionnaires_org_status_idx").on(table.orgId, table.status),
+    index("questionnaires_org_created_idx").on(table.orgId, table.createdAt),
+  ]
 );
 
 export const questions = pgTable(
@@ -170,7 +189,11 @@ export const questions = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
   },
-  (table) => [index("questions_org_id_idx").on(table.orgId)]
+  (table) => [
+    index("questions_org_id_idx").on(table.orgId),
+    index("questions_questionnaire_id_idx").on(table.questionnaireId),
+    index("questions_questionnaire_status_idx").on(table.questionnaireId, table.status),
+  ]
 );
 
 export const answerLibrary = pgTable(
@@ -209,10 +232,13 @@ export const usageLogs = pgTable(
     inputTokens: integer("input_tokens").notNull(),
     outputTokens: integer("output_tokens").notNull(),
     cachedTokens: integer("cached_tokens").default(0).notNull(),
-    estimatedCost: text("estimated_cost").notNull(),
+    estimatedCost: numeric("estimated_cost", { precision: 10, scale: 6 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
   },
-  (table) => [index("usage_logs_org_id_idx").on(table.orgId)]
+  (table) => [
+    index("usage_logs_org_id_idx").on(table.orgId),
+    index("usage_logs_org_created_idx").on(table.orgId, table.createdAt),
+  ]
 );
 
 export const auditLogs = pgTable(
@@ -222,14 +248,16 @@ export const auditLogs = pgTable(
     orgId: uuid("org_id")
       .references(() => organizations.id)
       .notNull(),
-    userId: uuid("user_id")
-      .references(() => users.id)
-      .notNull(),
+    userId: uuid("user_id"),
     action: text("action").notNull(),
     resourceType: text("resource_type").notNull(),
     resourceId: uuid("resource_id"),
     details: jsonb("details"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
   },
-  (table) => [index("audit_logs_org_id_idx").on(table.orgId)]
+  (table) => [
+    index("audit_logs_org_id_idx").on(table.orgId),
+    index("audit_logs_org_created_idx").on(table.orgId, table.createdAt),
+    index("audit_logs_org_action_idx").on(table.orgId, table.action),
+  ]
 );
