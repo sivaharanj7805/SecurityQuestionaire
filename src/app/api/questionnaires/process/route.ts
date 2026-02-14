@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { questions, questionnaires } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import { generateAnswer } from "@/lib/rag/generate";
+import { rateLimit, rateLimitHeaders } from "@/lib/rate-limit";
 
 const processSchema = z.object({
   questionnaireId: z.string().uuid(),
@@ -15,6 +16,15 @@ export async function POST(request: NextRequest) {
     const { orgId } = await auth();
     if (!orgId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Rate limit: 5 process requests per minute per org
+    const rl = rateLimit(`process:${orgId}`, { maxRequests: 5, windowMs: 60_000 });
+    if (!rl.success) {
+      return NextResponse.json(
+        { error: "Too many processing requests. Please try again later." },
+        { status: 429, headers: rateLimitHeaders(rl) }
+      );
     }
 
     const body = await request.json();
@@ -46,11 +56,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Prevent re-processing if already processing
+    if (questionnaire.status === "processing") {
+      return NextResponse.json(
+        { error: "Questionnaire is already being processed." },
+        { status: 409 }
+      );
+    }
+
     // Set status to processing
     await db
       .update(questionnaires)
       .set({ status: "processing", completedCount: 0 })
-      .where(eq(questionnaires.id, questionnaireId));
+      .where(and(eq(questionnaires.id, questionnaireId), eq(questionnaires.orgId, orgId)));
 
     // Get all questions
     const questionList = await db
@@ -95,60 +113,79 @@ async function processQuestions(
 ) {
   let completed = 0;
   let totalCost = 0;
+  let hadErrors = false;
 
-  for (const question of questionList) {
-    try {
-      const result = await generateAnswer(
-        orgId,
-        question.questionText,
-        question.answerFormat
-      );
+  try {
+    for (const question of questionList) {
+      try {
+        const result = await generateAnswer(
+          orgId,
+          question.questionText,
+          question.answerFormat
+        );
 
+        await db
+          .update(questions)
+          .set({
+            aiAnswer: result.answer,
+            confidence: result.confidence,
+            sourceChunkIds: result.sourceChunkIds,
+            status: "draft",
+            updatedAt: new Date(),
+          })
+          .where(and(eq(questions.id, question.id), eq(questions.orgId, orgId)));
+
+        totalCost += result.cost;
+      } catch (err) {
+        console.error(
+          `Failed to process question ${question.id}:`,
+          err
+        );
+        hadErrors = true;
+
+        // Don't fail the entire batch
+        await db
+          .update(questions)
+          .set({
+            aiAnswer: "Error: Failed to generate answer for this question.",
+            confidence: "none",
+            status: "draft",
+            updatedAt: new Date(),
+          })
+          .where(and(eq(questions.id, question.id), eq(questions.orgId, orgId)));
+      }
+
+      completed++;
+
+      // Update progress
       await db
-        .update(questions)
-        .set({
-          aiAnswer: result.answer,
-          confidence: result.confidence,
-          sourceChunkIds: result.sourceChunkIds,
-          status: "draft",
-          updatedAt: new Date(),
-        })
-        .where(eq(questions.id, question.id));
-
-      totalCost += result.cost;
-    } catch (err) {
-      console.error(
-        `Failed to process question ${question.id}:`,
-        err
-      );
-
-      // Don't fail the entire batch
-      await db
-        .update(questions)
-        .set({
-          aiAnswer: "Error: Failed to generate answer for this question.",
-          confidence: "none",
-          status: "draft",
-          updatedAt: new Date(),
-        })
-        .where(eq(questions.id, question.id));
+        .update(questionnaires)
+        .set({ completedCount: completed })
+        .where(and(eq(questionnaires.id, questionnaireId), eq(questionnaires.orgId, orgId)));
     }
 
-    completed++;
-
-    // Update progress
+    // Mark questionnaire as draft (ready for review)
     await db
       .update(questionnaires)
-      .set({ completedCount: completed })
-      .where(eq(questionnaires.id, questionnaireId));
+      .set({
+        status: "draft",
+        completedCount: completed,
+      })
+      .where(and(eq(questionnaires.id, questionnaireId), eq(questionnaires.orgId, orgId)));
+  } catch (fatalError) {
+    // If the entire batch processing fails (e.g., DB connection lost),
+    // update status so the UI doesn't show "processing" forever
+    console.error(`Fatal batch processing error for ${questionnaireId}:`, fatalError);
+    try {
+      await db
+        .update(questionnaires)
+        .set({
+          status: "draft",
+          completedCount: completed,
+        })
+        .where(and(eq(questionnaires.id, questionnaireId), eq(questionnaires.orgId, orgId)));
+    } catch (updateErr) {
+      console.error(`Failed to update questionnaire status after fatal error:`, updateErr);
+    }
   }
-
-  // Mark questionnaire as draft (ready for review)
-  await db
-    .update(questionnaires)
-    .set({
-      status: "draft",
-      completedCount: completed,
-    })
-    .where(eq(questionnaires.id, questionnaireId));
 }

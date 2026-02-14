@@ -4,6 +4,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { questionnaires, questions } from "@/lib/db/schema";
 import { eq, desc } from "drizzle-orm";
+import { enforceLimit, PlanLimitError } from "@/lib/billing/enforce";
 
 export async function GET() {
   try {
@@ -56,6 +57,19 @@ export async function POST(request: NextRequest) {
     }
 
     const { name, questions: questionData } = validation.data;
+
+    // Enforce plan limits
+    try {
+      await enforceLimit(orgId, "questionnaires");
+    } catch (error) {
+      if (error instanceof PlanLimitError) {
+        return NextResponse.json(
+          { error: error.message },
+          { status: 403 }
+        );
+      }
+      throw error;
+    }
 
     const [questionnaire] = await db
       .insert(questionnaires)

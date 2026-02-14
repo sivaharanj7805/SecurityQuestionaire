@@ -1,11 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
+import { z } from "zod";
 import {
   getLibraryEntries,
   addToLibrary,
   updateLibraryEntry,
   deleteLibraryEntry,
 } from "@/lib/actions/answer-library";
+
+const addSchema = z.object({
+  questionPattern: z.string().min(1).max(5000),
+  approvedAnswer: z.string().min(1).max(10000),
+  sourceDocIds: z.array(z.string().uuid()).optional(),
+});
+
+const updateSchema = z.object({
+  entryId: z.string().uuid(),
+  questionPattern: z.string().min(1).max(5000).optional(),
+  approvedAnswer: z.string().min(1).max(10000).optional(),
+});
 
 export async function GET() {
   try {
@@ -33,24 +46,15 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { questionPattern, approvedAnswer, sourceDocIds } = body as {
-      questionPattern: string;
-      approvedAnswer: string;
-      sourceDocIds?: string[];
-    };
-
-    if (!questionPattern || !approvedAnswer) {
+    const validation = addSchema.safeParse(body);
+    if (!validation.success) {
       return NextResponse.json(
-        { error: "questionPattern and approvedAnswer are required" },
+        { error: validation.error.issues[0].message },
         { status: 400 }
       );
     }
 
-    const entry = await addToLibrary({
-      questionPattern,
-      approvedAnswer,
-      sourceDocIds,
-    });
+    const entry = await addToLibrary(validation.data);
 
     return NextResponse.json(entry, { status: 201 });
   } catch (error) {
@@ -70,20 +74,16 @@ export async function PATCH(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { entryId, questionPattern, approvedAnswer } = body as {
-      entryId: string;
-      questionPattern?: string;
-      approvedAnswer?: string;
-    };
-
-    if (!entryId) {
+    const validation = updateSchema.safeParse(body);
+    if (!validation.success) {
       return NextResponse.json(
-        { error: "entryId is required" },
+        { error: validation.error.issues[0].message },
         { status: 400 }
       );
     }
 
-    await updateLibraryEntry(entryId, { questionPattern, approvedAnswer });
+    const { entryId, ...updates } = validation.data;
+    await updateLibraryEntry(entryId, updates);
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("Error updating answer library entry:", error);

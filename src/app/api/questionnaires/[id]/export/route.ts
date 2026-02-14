@@ -5,6 +5,7 @@ import { questions, questionnaires } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import { generateExcelExport } from "@/lib/export/excel-export";
 import { generateWordExport } from "@/lib/export/word-export";
+import { logAudit } from "@/lib/audit";
 
 export async function GET(
   request: NextRequest,
@@ -57,25 +58,30 @@ export async function GET(
       )
       .orderBy(questions.createdAt);
 
-    // Validate all questions are resolved
-    const unresolvedCount = questionList.filter(
-      (q) => q.status === "draft"
-    ).length;
+    // Validate all questions are resolved (not draft or rejected without replacement)
+    const unresolvedQuestions = questionList.filter(
+      (q) => q.status === "draft" || q.status === "rejected"
+    );
 
-    if (unresolvedCount > 0) {
+    if (unresolvedQuestions.length > 0) {
+      const draftCount = unresolvedQuestions.filter((q) => q.status === "draft").length;
+      const rejectedCount = unresolvedQuestions.filter((q) => q.status === "rejected").length;
+      const parts: string[] = [];
+      if (draftCount > 0) parts.push(`${draftCount} in draft`);
+      if (rejectedCount > 0) parts.push(`${rejectedCount} rejected`);
       return NextResponse.json(
         {
-          error: `Cannot export: ${unresolvedCount} question(s) still in draft status. Please review all questions before exporting.`,
+          error: `Cannot export: ${parts.join(" and ")} question(s) need review. Please approve or skip all questions before exporting.`,
         },
         { status: 400 }
       );
     }
 
-    // Map questions to export format
+    // Map questions to export format (skipped questions get N/A answer)
     const exportQuestions = questionList.map((q) => ({
       section: q.section,
       questionText: q.questionText,
-      answer: q.humanAnswer ?? q.aiAnswer ?? "",
+      answer: q.status === "skipped" ? "N/A" : (q.humanAnswer ?? q.aiAnswer ?? ""),
       confidence: q.confidence,
       status: q.status,
     }));
@@ -103,8 +109,17 @@ export async function GET(
     await db
       .update(questionnaires)
       .set({ status: "exported" })
-      .where(eq(questionnaires.id, id));
+      .where(and(eq(questionnaires.id, id), eq(questionnaires.orgId, orgId)));
 
+    await logAudit({
+      orgId,
+      action: "questionnaire_exported",
+      resourceType: "questionnaire",
+      resourceId: id,
+      details: { format, questionCount: questionList.length },
+    });
+
+    const dateStr = new Date().toISOString().split("T")[0];
     const safeFilename = questionnaire.name
       .replace(/[^a-zA-Z0-9-_ ]/g, "")
       .replace(/\s+/g, "_");
@@ -112,7 +127,8 @@ export async function GET(
     return new NextResponse(new Uint8Array(fileBuffer), {
       headers: {
         "Content-Type": contentType,
-        "Content-Disposition": `attachment; filename="${safeFilename}.${fileExtension}"`,
+        "Content-Disposition": `attachment; filename="${safeFilename}_${dateStr}.${fileExtension}"`,
+        "Content-Length": String(fileBuffer.length),
       },
     });
   } catch (error) {

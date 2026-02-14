@@ -5,6 +5,9 @@ import { db } from "@/lib/db";
 import { documents } from "@/lib/db/schema";
 import { uploadFile } from "@/lib/storage/r2";
 import { ingestDocument } from "@/lib/rag/ingest";
+import { enforceLimit, PlanLimitError } from "@/lib/billing/enforce";
+import { logAudit } from "@/lib/audit";
+import { rateLimit, rateLimitHeaders } from "@/lib/rate-limit";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -14,14 +17,48 @@ const ALLOWED_TYPES: Record<string, string> = {
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
 };
 
+// File magic bytes for validation
+const MAGIC_BYTES: Record<string, number[]> = {
+  pdf: [0x25, 0x50, 0x44, 0x46], // %PDF
+  xlsx: [0x50, 0x4b, 0x03, 0x04], // PK (ZIP archive)
+  docx: [0x50, 0x4b, 0x03, 0x04], // PK (ZIP archive)
+};
+
+function validateMagicBytes(buffer: Buffer, fileType: string): boolean {
+  const expected = MAGIC_BYTES[fileType];
+  if (!expected) return false;
+  if (buffer.length < expected.length) return false;
+  return expected.every((byte, i) => buffer[i] === byte);
+}
+
+function sanitizeFilename(filename: string): string {
+  return filename
+    .replace(/\.\./g, "") // Remove path traversal
+    .replace(/[/\\]/g, "") // Remove slashes
+    .replace(/\0/g, "") // Remove null bytes
+    .replace(/[^a-zA-Z0-9._\-\s]/g, "_") // Replace special chars
+    .slice(0, 255); // Enforce length limit
+}
+
+function hasDoubleExtension(filename: string): boolean {
+  const parts = filename.split(".");
+  if (parts.length <= 2) return false;
+  const dangerousExts = ["exe", "bat", "cmd", "sh", "ps1", "vbs", "js", "msi"];
+  // Check if any extension in a multi-extension file is dangerous
+  return parts.slice(1).some((part) => dangerousExts.includes(part.toLowerCase()));
+}
+
 const uploadSchema = z.object({
-  filename: z.string().min(1),
+  filename: z.string().min(1).max(255),
   fileType: z.string().refine((type) => type in ALLOWED_TYPES, {
     message: "File type not allowed. Only PDF, DOCX, and XLSX files are accepted.",
   }),
-  fileSize: z.number().max(MAX_FILE_SIZE, {
-    message: `File size exceeds the maximum limit of ${MAX_FILE_SIZE / 1024 / 1024}MB.`,
-  }),
+  fileSize: z
+    .number()
+    .min(1, { message: "File is empty." })
+    .max(MAX_FILE_SIZE, {
+      message: `File size exceeds the maximum limit of ${MAX_FILE_SIZE / 1024 / 1024}MB.`,
+    }),
 });
 
 export async function POST(request: NextRequest) {
@@ -32,6 +69,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: "Unauthorized. Please sign in and select an organization." },
         { status: 401 }
+      );
+    }
+
+    // Rate limit: 20 uploads per minute per org
+    const rl = rateLimit(`upload:${orgId}`, { maxRequests: 20, windowMs: 60_000 });
+    if (!rl.success) {
+      return NextResponse.json(
+        { error: "Too many uploads. Please try again later." },
+        { status: 429, headers: rateLimitHeaders(rl) }
       );
     }
 
@@ -58,10 +104,43 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Enforce plan limits
+    try {
+      await enforceLimit(orgId, "pages");
+    } catch (error) {
+      if (error instanceof PlanLimitError) {
+        return NextResponse.json(
+          { error: error.message },
+          { status: 403 }
+        );
+      }
+      throw error;
+    }
+
+    // Sanitize filename
+    const sanitizedFilename = sanitizeFilename(file.name);
+
+    // Check for double extensions
+    if (hasDoubleExtension(sanitizedFilename)) {
+      return NextResponse.json(
+        { error: "File has a suspicious double extension and was rejected." },
+        { status: 400 }
+      );
+    }
+
     const buffer = Buffer.from(await file.arrayBuffer());
 
+    // Validate magic bytes match the claimed file type
+    const resolvedType = ALLOWED_TYPES[file.type];
+    if (!validateMagicBytes(buffer, resolvedType)) {
+      return NextResponse.json(
+        { error: "File content does not match the expected file type." },
+        { status: 400 }
+      );
+    }
+
     const { fileKey, fileSize } = await uploadFile(orgId, buffer, {
-      filename: file.name,
+      filename: sanitizedFilename,
       contentType: file.type,
     });
 
@@ -69,14 +148,24 @@ export async function POST(request: NextRequest) {
       .insert(documents)
       .values({
         orgId,
-        filename: file.name,
+        filename: sanitizedFilename,
         fileKey,
-        fileType: ALLOWED_TYPES[file.type],
+        fileType: resolvedType,
         fileSize,
         status: "processing",
         uploadedBy: userId,
       })
       .returning();
+
+    // Log audit
+    await logAudit({
+      orgId,
+      userId,
+      action: "document_uploaded",
+      resourceType: "document",
+      resourceId: document.id,
+      details: { filename: sanitizedFilename, fileType: resolvedType, fileSize },
+    });
 
     // Fire-and-forget ingestion — don't block the upload response
     ingestDocument(orgId, document.id).catch((err) => {

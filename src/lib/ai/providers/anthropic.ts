@@ -43,6 +43,21 @@ function calculateCost(
   return inputCost + outputCost + cacheReadCost + cacheCreationCost;
 }
 
+const MAX_RETRIES = 3;
+const BASE_DELAY_MS = 1000;
+
+function isRetryableError(error: unknown): boolean {
+  if (error instanceof Anthropic.APIError) {
+    // Retry on rate limits (429), server errors (500+), and overloaded (529)
+    return error.status === 429 || error.status >= 500;
+  }
+  // Retry on network errors
+  if (error instanceof Error && error.message.includes("fetch")) {
+    return true;
+  }
+  return false;
+}
+
 function createProvider(model: string): AIProvider {
   return {
     async generateAnswer(
@@ -52,47 +67,62 @@ function createProvider(model: string): AIProvider {
     ): Promise<GenerateResult> {
       const client = getClient();
 
-      const response = await client.messages.create({
-        model,
-        max_tokens: opts?.maxTokens ?? 2048,
-        temperature: opts?.temperature ?? 0.2,
-        system: [
-          {
-            type: "text",
-            text: system,
-            cache_control: { type: "ephemeral" },
-          },
-        ],
-        messages: [
-          {
-            role: "user",
-            content: user,
-          },
-        ],
-      });
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+          const response = await client.messages.create({
+            model,
+            max_tokens: opts?.maxTokens ?? 2048,
+            temperature: opts?.temperature ?? 0.2,
+            system: [
+              {
+                type: "text",
+                text: system,
+                cache_control: { type: "ephemeral" },
+              },
+            ],
+            messages: [
+              {
+                role: "user",
+                content: user,
+              },
+            ],
+          });
 
-      const answer = response.content
-        .filter((block) => block.type === "text")
-        .map((block) => {
-          if (block.type === "text") return block.text;
-          return "";
-        })
-        .join("");
+          const answer = response.content
+            .filter((block) => block.type === "text")
+            .map((block) => {
+              if (block.type === "text") return block.text;
+              return "";
+            })
+            .join("");
 
-      const usage = response.usage as unknown as Record<string, number>;
-      const tokensUsed = {
-        input: response.usage.input_tokens,
-        output: response.usage.output_tokens,
-        cacheRead: usage.cache_read_input_tokens ?? 0,
-        cacheCreation: usage.cache_creation_input_tokens ?? 0,
-      };
+          const usage = response.usage as unknown as Record<string, number>;
+          const tokensUsed = {
+            input: response.usage.input_tokens,
+            output: response.usage.output_tokens,
+            cacheRead: usage.cache_read_input_tokens ?? 0,
+            cacheCreation: usage.cache_creation_input_tokens ?? 0,
+          };
 
-      return {
-        answer,
-        tokensUsed,
-        cost: calculateCost(model, tokensUsed),
-        model,
-      };
+          return {
+            answer,
+            tokensUsed,
+            cost: calculateCost(model, tokensUsed),
+            model,
+          };
+        } catch (error) {
+          lastError = error;
+          if (attempt < MAX_RETRIES && isRetryableError(error)) {
+            const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            continue;
+          }
+          throw error;
+        }
+      }
+
+      throw lastError;
     },
   };
 }

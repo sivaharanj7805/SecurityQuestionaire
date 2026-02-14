@@ -1,8 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
+import { z } from "zod";
 import { db } from "@/lib/db";
 import { questions, questionnaires } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
+
+const VALID_QUESTION_STATUSES = ["draft", "approved", "rejected", "skipped"] as const;
+const VALID_CONFIDENCE_LEVELS = ["high", "medium", "low", "none"] as const;
+
+const singleUpdateSchema = z.object({
+  questionId: z.string().uuid(),
+  humanAnswer: z.string().max(10000).optional(),
+  status: z.enum(VALID_QUESTION_STATUSES).optional(),
+  aiAnswer: z.string().max(10000).optional(),
+  confidence: z.enum(VALID_CONFIDENCE_LEVELS).optional(),
+});
+
+const bulkUpdateSchema = z.object({
+  questionIds: z.array(z.string().uuid()).min(1).max(500),
+  status: z.enum(VALID_QUESTION_STATUSES),
+});
 
 export async function GET(
   _request: NextRequest,
@@ -52,7 +69,15 @@ export async function PATCH(
 
     // Single question update
     if (body.questionId) {
-      const { questionId, ...updates } = body;
+      const validation = singleUpdateSchema.safeParse(body);
+      if (!validation.success) {
+        return NextResponse.json(
+          { error: validation.error.issues[0].message },
+          { status: 400 }
+        );
+      }
+
+      const { questionId, ...updates } = validation.data;
       const allowedFields: Record<string, unknown> = {};
 
       if (updates.humanAnswer !== undefined) allowedFields.humanAnswer = updates.humanAnswer;
@@ -78,15 +103,20 @@ export async function PATCH(
 
     // Bulk update
     if (body.questionIds && body.status) {
-      const { questionIds, status } = body as {
-        questionIds: string[];
-        status: string;
-      };
+      const validation = bulkUpdateSchema.safeParse(body);
+      if (!validation.success) {
+        return NextResponse.json(
+          { error: validation.error.issues[0].message },
+          { status: 400 }
+        );
+      }
+
+      const { questionIds, status } = validation.data;
 
       for (const qId of questionIds) {
         await db
           .update(questions)
-          .set({ status: status as "draft" | "approved" | "rejected" | "skipped", updatedAt: new Date() })
+          .set({ status, updatedAt: new Date() })
           .where(
             and(
               eq(questions.id, qId),
@@ -115,7 +145,7 @@ export async function PATCH(
         await db
           .update(questionnaires)
           .set({ status: "completed" })
-          .where(eq(questionnaires.id, questionnaireId));
+          .where(and(eq(questionnaires.id, questionnaireId), eq(questionnaires.orgId, orgId)));
       }
 
       return NextResponse.json({

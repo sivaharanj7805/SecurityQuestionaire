@@ -103,12 +103,13 @@ export async function ingestDocument(
       await db.insert(chunks).values(batch);
     }
 
-    // 8. Update document status to ready
+    // 8. Update document status to ready with chunk count
     await db
       .update(documents)
       .set({
         status: "ready",
         pageCount: parsed.metadata.pageCount ?? null,
+        chunkCount: docChunks.length,
       })
       .where(and(eq(documents.id, documentId), eq(documents.orgId, orgId)));
 
@@ -126,7 +127,10 @@ export async function ingestDocument(
 
     await db
       .update(documents)
-      .set({ status: "failed" })
+      .set({
+        status: "failed",
+        errorMessage: errorMessage,
+      })
       .where(and(eq(documents.id, documentId), eq(documents.orgId, orgId)));
 
     throw error;
