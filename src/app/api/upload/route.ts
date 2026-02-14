@@ -6,6 +6,7 @@ import { documents } from "@/lib/db/schema";
 import { uploadFile } from "@/lib/storage/r2";
 import { ingestDocument } from "@/lib/rag/ingest";
 import { enforceLimit, PlanLimitError } from "@/lib/billing/enforce";
+import { logAudit } from "@/lib/audit";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -145,6 +146,16 @@ export async function POST(request: NextRequest) {
         uploadedBy: userId,
       })
       .returning();
+
+    // Log audit
+    await logAudit({
+      orgId,
+      userId,
+      action: "document_uploaded",
+      resourceType: "document",
+      resourceId: document.id,
+      details: { filename: sanitizedFilename, fileType: resolvedType, fileSize },
+    });
 
     // Fire-and-forget ingestion — don't block the upload response
     ingestDocument(orgId, document.id).catch((err) => {

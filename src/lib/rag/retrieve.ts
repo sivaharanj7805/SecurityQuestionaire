@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { chunks, documents } from "@/lib/db/schema";
 import { eq, and, sql, gt } from "drizzle-orm";
 import { generateEmbeddings } from "./embed";
+import { truncateForEmbedding } from "@/lib/ai/sanitize";
 
 export interface RetrievedChunk {
   chunkId: string;
@@ -17,8 +18,10 @@ export async function retrieveContext(
   topK = 8,
   minSimilarity = 0.3
 ): Promise<RetrievedChunk[]> {
+  // Truncate very long queries to prevent embedding issues
+  const truncatedQuery = truncateForEmbedding(query);
   // Embed the query
-  const { embeddings } = await generateEmbeddings([query]);
+  const { embeddings } = await generateEmbeddings([truncatedQuery]);
   if (embeddings.length === 0) {
     return [];
   }
@@ -63,7 +66,8 @@ export async function retrieveFromAnswerLibrary(
   query: string,
   minSimilarity = 0.85
 ): Promise<{ questionPattern: string; approvedAnswer: string; similarity: number } | null> {
-  const { embeddings } = await generateEmbeddings([query]);
+  const truncatedQuery = truncateForEmbedding(query);
+  const { embeddings } = await generateEmbeddings([truncatedQuery]);
   if (embeddings.length === 0) return null;
 
   const queryEmbedding = embeddings[0];

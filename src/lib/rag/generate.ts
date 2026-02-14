@@ -92,12 +92,30 @@ export async function generateAnswer(
   // 6. Track usage
   await trackUsage(orgId, result);
 
-  // 7. Score confidence
+  // 7. Handle empty AI response
+  const answer = result.answer.trim();
+  if (answer.length === 0) {
+    return {
+      answer: "INSUFFICIENT_CONTEXT: The AI model returned an empty response.",
+      confidence: "none",
+      confidenceReason: "AI model returned an empty response.",
+      sourceChunkIds: contextChunks.map((c) => c.chunkId),
+      tokensUsed: {
+        input: result.tokensUsed.input,
+        output: result.tokensUsed.output,
+      },
+      cost: result.cost,
+      model: result.model,
+      fromAnswerLibrary: false,
+    };
+  }
+
+  // 8. Score confidence
   const topSimilarity = contextChunks[0].similarity;
-  const { level, reason } = scoreConfidence(result.answer, topSimilarity);
+  const { level, reason } = scoreConfidence(answer, topSimilarity);
 
   return {
-    answer: result.answer,
+    answer,
     confidence: level,
     confidenceReason: reason,
     sourceChunkIds: contextChunks.map((c) => c.chunkId),
