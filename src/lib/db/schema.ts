@@ -198,6 +198,23 @@ export const answerLibrary = pgTable(
   ]
 );
 
+export const usageLogs = pgTable(
+  "usage_logs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    orgId: uuid("org_id")
+      .references(() => organizations.id)
+      .notNull(),
+    model: text("model").notNull(),
+    inputTokens: integer("input_tokens").notNull(),
+    outputTokens: integer("output_tokens").notNull(),
+    cachedTokens: integer("cached_tokens").default(0).notNull(),
+    estimatedCost: text("estimated_cost").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
+  },
+  (table) => [index("usage_logs_org_id_idx").on(table.orgId)]
+);
+
 export const auditLogs = pgTable(
   "audit_logs",
   {
