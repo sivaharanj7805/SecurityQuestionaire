@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
     await db
       .update(questionnaires)
       .set({ status: "processing", completedCount: 0 })
-      .where(eq(questionnaires.id, questionnaireId));
+      .where(and(eq(questionnaires.id, questionnaireId), eq(questionnaires.orgId, orgId)));
 
     // Get all questions
     const questionList = await db
@@ -113,7 +113,7 @@ async function processQuestions(
           status: "draft",
           updatedAt: new Date(),
         })
-        .where(eq(questions.id, question.id));
+        .where(and(eq(questions.id, question.id), eq(questions.orgId, orgId)));
 
       totalCost += result.cost;
     } catch (err) {
@@ -131,7 +131,7 @@ async function processQuestions(
           status: "draft",
           updatedAt: new Date(),
         })
-        .where(eq(questions.id, question.id));
+        .where(and(eq(questions.id, question.id), eq(questions.orgId, orgId)));
     }
 
     completed++;
@@ -140,7 +140,7 @@ async function processQuestions(
     await db
       .update(questionnaires)
       .set({ completedCount: completed })
-      .where(eq(questionnaires.id, questionnaireId));
+      .where(and(eq(questionnaires.id, questionnaireId), eq(questionnaires.orgId, orgId)));
   }
 
   // Mark questionnaire as draft (ready for review)
@@ -150,5 +150,5 @@ async function processQuestions(
       status: "draft",
       completedCount: completed,
     })
-    .where(eq(questionnaires.id, questionnaireId));
+    .where(and(eq(questionnaires.id, questionnaireId), eq(questionnaires.orgId, orgId)));
 }

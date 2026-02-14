@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { documents } from "@/lib/db/schema";
 import { uploadFile } from "@/lib/storage/r2";
 import { ingestDocument } from "@/lib/rag/ingest";
+import { enforceLimit, PlanLimitError } from "@/lib/billing/enforce";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -90,6 +91,19 @@ export async function POST(request: NextRequest) {
         { error: validation.error.issues[0].message },
         { status: 400 }
       );
+    }
+
+    // Enforce plan limits
+    try {
+      await enforceLimit(orgId, "pages");
+    } catch (error) {
+      if (error instanceof PlanLimitError) {
+        return NextResponse.json(
+          { error: error.message },
+          { status: 403 }
+        );
+      }
+      throw error;
     }
 
     // Sanitize filename

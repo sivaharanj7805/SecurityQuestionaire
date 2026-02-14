@@ -10,20 +10,20 @@ export interface UsageData {
 }
 
 export async function getCurrentUsage(orgId: string): Promise<UsageData> {
-  const [questionnaireCount] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(questionnaires)
-    .where(eq(questionnaires.orgId, orgId));
-
-  const [pageCount] = await db
-    .select({ total: sql<number>`coalesce(sum(page_count), 0)::int` })
-    .from(documents)
-    .where(eq(documents.orgId, orgId));
-
-  const [seatCount] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(users)
-    .where(eq(users.orgId, orgId));
+  const [[questionnaireCount], [pageCount], [seatCount]] = await Promise.all([
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(questionnaires)
+      .where(eq(questionnaires.orgId, orgId)),
+    db
+      .select({ total: sql<number>`coalesce(sum(page_count), 0)::int` })
+      .from(documents)
+      .where(eq(documents.orgId, orgId)),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(users)
+      .where(eq(users.orgId, orgId)),
+  ]);
 
   return {
     questionnaires: questionnaireCount.count,

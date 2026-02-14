@@ -77,7 +77,6 @@ export async function retrieveFromAnswerLibrary(
       approvedAnswer: answerLibrary.approvedAnswer,
       similarity: sql<number>`1 - (${answerLibrary.embedding} <=> ${embeddingStr}::vector)`,
       id: answerLibrary.id,
-      timesReused: answerLibrary.timesReused,
     })
     .from(answerLibrary)
     .where(
@@ -96,14 +95,14 @@ export async function retrieveFromAnswerLibrary(
 
   const match = results[0];
 
-  // Increment reuse counter
+  // Atomically increment reuse counter to avoid race conditions
   await db
     .update(answerLibrary)
     .set({
-      timesReused: match.timesReused + 1,
+      timesReused: sql`${answerLibrary.timesReused} + 1`,
       lastUsedAt: new Date(),
     })
-    .where(eq(answerLibrary.id, match.id));
+    .where(and(eq(answerLibrary.id, match.id), eq(answerLibrary.orgId, orgId)));
 
   return {
     questionPattern: match.questionPattern,

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth, currentUser } from "@clerk/nextjs/server";
+import { z } from "zod";
 import { db } from "@/lib/db";
 import { organizations } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
@@ -11,6 +12,11 @@ import {
 } from "@/lib/billing/stripe";
 import { getCurrentUsage } from "@/lib/billing/usage";
 import { getPlanDetails, PLANS } from "@/lib/billing/plans";
+
+const billingActionSchema = z.object({
+  action: z.enum(["checkout", "portal"]),
+  priceId: z.string().min(1).optional(),
+});
 
 export async function GET() {
   try {
@@ -78,10 +84,14 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { action, priceId } = body as {
-      action: "checkout" | "portal";
-      priceId?: string;
-    };
+    const validation = billingActionSchema.safeParse(body);
+    if (!validation.success) {
+      return NextResponse.json(
+        { error: validation.error.issues[0].message },
+        { status: 400 }
+      );
+    }
+    const { action, priceId } = validation.data;
 
     const [org] = await db
       .select()

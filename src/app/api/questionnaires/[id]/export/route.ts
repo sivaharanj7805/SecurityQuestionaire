@@ -103,7 +103,7 @@ export async function GET(
     await db
       .update(questionnaires)
       .set({ status: "exported" })
-      .where(eq(questionnaires.id, id));
+      .where(and(eq(questionnaires.id, id), eq(questionnaires.orgId, orgId)));
 
     const safeFilename = questionnaire.name
       .replace(/[^a-zA-Z0-9-_ ]/g, "")
@@ -113,6 +113,7 @@ export async function GET(
       headers: {
         "Content-Type": contentType,
         "Content-Disposition": `attachment; filename="${safeFilename}.${fileExtension}"`,
+        "Content-Length": String(fileBuffer.length),
       },
     });
   } catch (error) {
