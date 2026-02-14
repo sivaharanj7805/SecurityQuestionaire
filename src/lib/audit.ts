@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { auditLogs } from "@/lib/db/schema";
+import { lt } from "drizzle-orm";
 
 export type AuditAction =
   | "document_uploaded"
@@ -47,4 +48,24 @@ export async function logAudit(params: {
     // Audit logging should never crash the main operation
     console.error("Failed to write audit log:", error);
   }
+}
+
+const DEFAULT_RETENTION_DAYS = 90;
+
+/**
+ * Delete audit log entries older than the specified retention period.
+ * Call this from a scheduled job (e.g. Vercel cron, external scheduler).
+ * Returns the number of deleted rows.
+ */
+export async function cleanupAuditLogs(
+  retentionDays: number = DEFAULT_RETENTION_DAYS
+): Promise<number> {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - retentionDays);
+
+  const result = await db
+    .delete(auditLogs)
+    .where(lt(auditLogs.createdAt, cutoff));
+
+  return result.count;
 }

@@ -6,6 +6,8 @@ import { documents } from "@/lib/db/schema";
 import { uploadFile } from "@/lib/storage/r2";
 import { enforceLimit, PlanLimitError } from "@/lib/billing/enforce";
 import { logAudit } from "@/lib/audit";
+import { checkRateLimit, rateLimitHeaders } from "@/lib/rate-limit";
+import { resolveUserId } from "@/lib/users";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -70,7 +72,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // TODO: Add Upstash Redis rate limiting here (20 uploads/min per org)
+    const rateLimit = await checkRateLimit("upload", orgId);
+    if (rateLimit && !rateLimit.success) {
+      return NextResponse.json(
+        { error: "Too many uploads. Please wait before uploading more files." },
+        { status: 429, headers: rateLimitHeaders(rateLimit) }
+      );
+    }
 
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
@@ -130,6 +138,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Resolve Clerk userId to internal user UUID
+    const internalUserId = await resolveUserId(userId);
+    if (!internalUserId) {
+      return NextResponse.json(
+        { error: "User not found. Please complete onboarding first." },
+        { status: 403 }
+      );
+    }
+
     const { fileKey, fileSize } = await uploadFile(orgId, buffer, {
       filename: sanitizedFilename,
       contentType: file.type,
@@ -144,14 +161,14 @@ export async function POST(request: NextRequest) {
         fileType: resolvedType,
         fileSize,
         status: "processing",
-        uploadedBy: userId,
+        uploadedBy: internalUserId,
       })
       .returning();
 
     // Log audit
     await logAudit({
       orgId,
-      userId,
+      userId: internalUserId,
       action: "document_uploaded",
       resourceType: "document",
       resourceId: document.id,

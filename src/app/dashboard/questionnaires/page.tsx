@@ -93,7 +93,8 @@ export default function QuestionnairesPage() {
     try {
       const res = await fetch("/api/questionnaires");
       if (res.ok) {
-        setQuestionnaires(await res.json());
+        const json = await res.json();
+        setQuestionnaires(json.data ?? json);
       }
     } catch {
       console.error("Failed to fetch questionnaires");

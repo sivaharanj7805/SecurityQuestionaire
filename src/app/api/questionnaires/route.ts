@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { questionnaires, questions } from "@/lib/db/schema";
 import { eq, desc, sql } from "drizzle-orm";
 import { enforceLimit, PlanLimitError } from "@/lib/billing/enforce";
+import { resolveUserId } from "@/lib/users";
 
 export async function GET(request: NextRequest) {
   try {
@@ -89,6 +90,15 @@ export async function POST(request: NextRequest) {
       throw error;
     }
 
+    // Resolve Clerk userId to internal user UUID
+    const internalUserId = await resolveUserId(userId);
+    if (!internalUserId) {
+      return NextResponse.json(
+        { error: "User not found. Please complete onboarding first." },
+        { status: 403 }
+      );
+    }
+
     const [questionnaire] = await db
       .insert(questionnaires)
       .values({
@@ -97,7 +107,7 @@ export async function POST(request: NextRequest) {
         status: "draft",
         questionCount: questionData.length,
         completedCount: 0,
-        createdBy: userId,
+        createdBy: internalUserId,
       })
       .returning();
 

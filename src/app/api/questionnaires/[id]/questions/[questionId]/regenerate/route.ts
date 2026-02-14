@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { questions } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
 import { generateAnswer } from "@/lib/rag/generate";
+import { checkRateLimit, rateLimitHeaders } from "@/lib/rate-limit";
 
 export async function POST(
   _request: NextRequest,
@@ -13,6 +14,14 @@ export async function POST(
     const { orgId } = await auth();
     if (!orgId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const rateLimit = await checkRateLimit("regenerate", orgId);
+    if (rateLimit && !rateLimit.success) {
+      return NextResponse.json(
+        { error: "Too many regeneration requests. Please wait." },
+        { status: 429, headers: rateLimitHeaders(rateLimit) }
+      );
     }
 
     const { id: questionnaireId, questionId } = await params;

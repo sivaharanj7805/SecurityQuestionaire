@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { questions, questionnaires } from "@/lib/db/schema";
 import { eq, and, isNull } from "drizzle-orm";
 import { generateAnswer } from "@/lib/rag/generate";
+import { checkRateLimit, rateLimitHeaders } from "@/lib/rate-limit";
 
 const BATCH_SIZE = 10;
 
@@ -19,7 +20,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // TODO: Add Upstash Redis rate limiting here (5 req/min per org)
+    const rateLimit = await checkRateLimit("process", orgId);
+    if (rateLimit && !rateLimit.success) {
+      return NextResponse.json(
+        { error: "Too many requests. Please wait before processing more questions." },
+        { status: 429, headers: rateLimitHeaders(rateLimit) }
+      );
+    }
 
     const body = await request.json();
     const validation = processSchema.safeParse(body);
