@@ -3,23 +3,42 @@ import { auth } from "@clerk/nextjs/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { questionnaires, questions } from "@/lib/db/schema";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, sql } from "drizzle-orm";
 import { enforceLimit, PlanLimitError } from "@/lib/billing/enforce";
+import { resolveUserId } from "@/lib/users";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     const { orgId } = await auth();
     if (!orgId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const list = await db
-      .select()
-      .from(questionnaires)
-      .where(eq(questionnaires.orgId, orgId))
-      .orderBy(desc(questionnaires.createdAt));
+    const { searchParams } = new URL(request.url);
+    const page = Math.max(1, parseInt(searchParams.get("page") ?? "1", 10));
+    const pageSize = Math.min(100, Math.max(1, parseInt(searchParams.get("pageSize") ?? "50", 10)));
+    const offset = (page - 1) * pageSize;
 
-    return NextResponse.json(list);
+    const [list, countResult] = await Promise.all([
+      db
+        .select()
+        .from(questionnaires)
+        .where(eq(questionnaires.orgId, orgId))
+        .orderBy(desc(questionnaires.createdAt))
+        .limit(pageSize)
+        .offset(offset),
+      db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(questionnaires)
+        .where(eq(questionnaires.orgId, orgId)),
+    ]);
+
+    return NextResponse.json({
+      data: list,
+      total: countResult[0].count,
+      page,
+      pageSize,
+    });
   } catch (error) {
     console.error("Error fetching questionnaires:", error);
     return NextResponse.json(
@@ -71,6 +90,15 @@ export async function POST(request: NextRequest) {
       throw error;
     }
 
+    // Resolve Clerk userId to internal user UUID
+    const internalUserId = await resolveUserId(userId);
+    if (!internalUserId) {
+      return NextResponse.json(
+        { error: "User not found. Please complete onboarding first." },
+        { status: 403 }
+      );
+    }
+
     const [questionnaire] = await db
       .insert(questionnaires)
       .values({
@@ -79,7 +107,7 @@ export async function POST(request: NextRequest) {
         status: "draft",
         questionCount: questionData.length,
         completedCount: 0,
-        createdBy: userId,
+        createdBy: internalUserId,
       })
       .returning();
 

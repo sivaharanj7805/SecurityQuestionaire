@@ -64,7 +64,7 @@ export default function AnswerLibraryPage() {
         setEntries(await res.json());
       }
     } catch {
-      // silently fail
+      console.error("Failed to fetch answer library entries");
     } finally {
       setIsLoading(false);
     }

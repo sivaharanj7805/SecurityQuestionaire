@@ -7,9 +7,17 @@ import { seedDemoData } from "@/lib/demo/seed";
 
 export async function POST() {
   try {
-    const { userId, orgId } = await auth();
+    const { userId, orgId, orgRole } = await auth();
     if (!userId || !orgId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Only org admins/owners can seed demo data
+    if (orgRole !== "org:admin" && orgRole !== "org:owner") {
+      return NextResponse.json(
+        { error: "Only organization admins can seed demo data." },
+        { status: 403 }
+      );
     }
 
     // Look up internal org and user IDs

@@ -24,11 +24,11 @@ export default function KnowledgeBasePage() {
     try {
       const res = await fetch("/api/documents");
       if (res.ok) {
-        const data = await res.json();
-        setDocuments(data);
+        const json = await res.json();
+        setDocuments(json.data ?? json);
       }
     } catch {
-      // silently fail on fetch — documents will show as empty
+      console.error("Failed to fetch documents");
     } finally {
       setIsLoading(false);
     }

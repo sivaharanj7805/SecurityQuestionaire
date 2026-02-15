@@ -1,92 +1,88 @@
-/**
- * Simple in-memory sliding-window rate limiter.
- *
- * Note: On serverless platforms like Vercel, each invocation may use a
- * separate instance, so this provides per-instance protection only.
- * For production-grade rate limiting, use an external store (Redis/Upstash).
- */
+import { Ratelimit } from "@upstash/ratelimit";
+import { Redis } from "@upstash/redis";
 
-interface RateLimitEntry {
-  timestamps: number[];
+let _redis: Redis | null = null;
+
+function getRedis(): Redis | null {
+  if (_redis) return _redis;
+
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+
+  if (!url || !token) {
+    return null;
+  }
+
+  _redis = new Redis({ url, token });
+  return _redis;
 }
 
-const store = new Map<string, RateLimitEntry>();
+type RateLimitTier = "upload" | "process" | "ingest" | "regenerate";
 
-// Clean up stale entries every 60 seconds
-let cleanupInterval: ReturnType<typeof setInterval> | null = null;
+const LIMITS: Record<RateLimitTier, { requests: number; window: string }> = {
+  upload: { requests: 20, window: "1 m" },
+  process: { requests: 5, window: "1 m" },
+  ingest: { requests: 20, window: "1 m" },
+  regenerate: { requests: 10, window: "1 m" },
+};
 
-function ensureCleanup(windowMs: number) {
-  if (cleanupInterval) return;
-  cleanupInterval = setInterval(() => {
-    const now = Date.now();
-    for (const [key, entry] of store) {
-      entry.timestamps = entry.timestamps.filter((t) => now - t < windowMs);
-      if (entry.timestamps.length === 0) {
-        store.delete(key);
-      }
-    }
-  }, 60_000);
-  // Don't prevent process exit
-  if (cleanupInterval && typeof cleanupInterval === "object" && "unref" in cleanupInterval) {
-    cleanupInterval.unref();
-  }
+const _limiters = new Map<RateLimitTier, Ratelimit>();
+
+function getLimiter(tier: RateLimitTier): Ratelimit | null {
+  const redis = getRedis();
+  if (!redis) return null;
+
+  let limiter = _limiters.get(tier);
+  if (limiter) return limiter;
+
+  const config = LIMITS[tier];
+  limiter = new Ratelimit({
+    redis,
+    limiter: Ratelimit.slidingWindow(config.requests, config.window as Parameters<typeof Ratelimit.slidingWindow>[1]),
+    prefix: `ratelimit:${tier}`,
+    analytics: true,
+  });
+
+  _limiters.set(tier, limiter);
+  return limiter;
 }
 
 export interface RateLimitResult {
   success: boolean;
   limit: number;
   remaining: number;
-  resetMs: number;
+  reset: number;
 }
 
-export function rateLimit(
-  key: string,
-  {
-    maxRequests = 60,
-    windowMs = 60_000,
-  }: { maxRequests?: number; windowMs?: number } = {}
-): RateLimitResult {
-  ensureCleanup(windowMs);
+/**
+ * Check rate limit for a given tier and identifier (typically orgId).
+ * Returns null if rate limiting is not configured (missing env vars),
+ * allowing graceful degradation in development.
+ */
+export async function checkRateLimit(
+  tier: RateLimitTier,
+  identifier: string
+): Promise<RateLimitResult | null> {
+  const limiter = getLimiter(tier);
+  if (!limiter) return null;
 
-  const now = Date.now();
-  let entry = store.get(key);
-
-  if (!entry) {
-    entry = { timestamps: [] };
-    store.set(key, entry);
-  }
-
-  // Remove timestamps outside the window
-  entry.timestamps = entry.timestamps.filter((t) => now - t < windowMs);
-
-  if (entry.timestamps.length >= maxRequests) {
-    const oldestInWindow = entry.timestamps[0];
-    const resetMs = oldestInWindow + windowMs - now;
-    return {
-      success: false,
-      limit: maxRequests,
-      remaining: 0,
-      resetMs,
-    };
-  }
-
-  entry.timestamps.push(now);
+  const result = await limiter.limit(identifier);
 
   return {
-    success: true,
-    limit: maxRequests,
-    remaining: maxRequests - entry.timestamps.length,
-    resetMs: windowMs,
+    success: result.success,
+    limit: result.limit,
+    remaining: result.remaining,
+    reset: result.reset,
   };
 }
 
 /**
- * Helper to create a rate-limited NextResponse when limit is exceeded.
+ * Build rate limit response headers from a rate limit result.
  */
 export function rateLimitHeaders(result: RateLimitResult): Record<string, string> {
   return {
     "X-RateLimit-Limit": String(result.limit),
     "X-RateLimit-Remaining": String(result.remaining),
-    "X-RateLimit-Reset": String(Math.ceil(result.resetMs / 1000)),
+    "X-RateLimit-Reset": String(result.reset),
   };
 }

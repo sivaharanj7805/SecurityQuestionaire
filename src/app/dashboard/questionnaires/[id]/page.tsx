@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -111,7 +111,6 @@ function StatusIcon({ status }: { status: Question["status"] }) {
 
 export default function ReviewPage() {
   const params = useParams();
-  const router = useRouter();
   const questionnaireId = params.id as string;
   const { toast } = useToast();
 
@@ -148,7 +147,11 @@ export default function ReviewPage() {
         }
       }
     } catch {
-      // silently fail
+      toast({
+        title: "Failed to load data",
+        description: "Could not fetch questionnaire data. Please refresh.",
+        variant: "destructive",
+      });
     } finally {
       setIsLoading(false);
     }
@@ -316,19 +319,20 @@ export default function ReviewPage() {
     if (!selectedQuestion) return;
     setIsRegenerating(true);
     try {
-      const res = await fetch("/api/questionnaires/process", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          questionnaireId,
-          questionIds: [selectedQuestion.id],
-        }),
-      });
+      const res = await fetch(
+        `/api/questionnaires/${questionnaireId}/questions/${selectedQuestion.id}/regenerate`,
+        { method: "POST" }
+      );
       if (res.ok) {
-        toast({ title: "Regenerating answer..." });
-        // Poll for updates
-        setTimeout(fetchData, 2000);
-        setTimeout(fetchData, 5000);
+        toast({ title: "Answer regenerated" });
+        await fetchData();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast({
+          title: "Regeneration failed",
+          description: data.error ?? "Could not regenerate answer.",
+          variant: "destructive",
+        });
       }
     } finally {
       setIsRegenerating(false);

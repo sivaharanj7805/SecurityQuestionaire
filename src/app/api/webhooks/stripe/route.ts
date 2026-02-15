@@ -76,7 +76,14 @@ export async function POST(request: NextRequest) {
   }
 
   const stripe = getStripeInstance();
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!;
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  if (!webhookSecret) {
+    console.error("STRIPE_WEBHOOK_SECRET is not configured");
+    return NextResponse.json(
+      { error: "Webhook not configured" },
+      { status: 500 }
+    );
+  }
 
   let event: Stripe.Event;
 
@@ -148,8 +155,10 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ received: true });
   } catch (error) {
-    // Return 200 even on handler errors to prevent Stripe from retrying non-transient failures
-    console.error("Stripe webhook handler error:", error);
-    return NextResponse.json({ received: true });
+    // Return 200 even on handler errors to prevent Stripe from retrying non-transient failures.
+    // ALERT: This error needs investigation — subscription state may be inconsistent.
+    console.error("CRITICAL: Stripe webhook handler error — subscription state may be inconsistent:", error);
+    // TODO: Send alert to monitoring service (e.g., Sentry, PagerDuty)
+    return NextResponse.json({ received: true, error: "Handler error logged" });
   }
 }

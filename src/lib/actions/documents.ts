@@ -91,19 +91,20 @@ export async function deleteDocument(documentId: string) {
     throw new Error("Document not found");
   }
 
-  // Delete chunks first
-  await db
-    .delete(chunks)
-    .where(
-      and(eq(chunks.documentId, documentId), eq(chunks.orgId, orgId))
-    );
+  // Delete chunks + document in a transaction
+  await db.transaction(async (tx) => {
+    await tx
+      .delete(chunks)
+      .where(
+        and(eq(chunks.documentId, documentId), eq(chunks.orgId, orgId))
+      );
 
-  // Delete from DB
-  await db
-    .delete(documents)
-    .where(and(eq(documents.id, documentId), eq(documents.orgId, orgId)));
+    await tx
+      .delete(documents)
+      .where(and(eq(documents.id, documentId), eq(documents.orgId, orgId)));
+  });
 
-  // Delete from R2
+  // Delete from R2 after DB transaction commits (best-effort cleanup)
   await deleteFile(orgId, document.fileKey);
 
   return { success: true };

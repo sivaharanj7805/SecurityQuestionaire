@@ -7,16 +7,37 @@ import {
 import { getSignedUrl as awsGetSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { randomUUID } from "crypto";
 
-const s3Client = new S3Client({
-  region: "auto",
-  endpoint: process.env.R2_ENDPOINT!,
-  credentials: {
-    accessKeyId: process.env.R2_ACCESS_KEY_ID!,
-    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
-  },
-});
+let _s3Client: S3Client | null = null;
 
-const BUCKET = process.env.R2_BUCKET_NAME!;
+function getS3Client(): S3Client {
+  if (_s3Client) return _s3Client;
+
+  const endpoint = process.env.R2_ENDPOINT;
+  const accessKeyId = process.env.R2_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
+
+  if (!endpoint || !accessKeyId || !secretAccessKey) {
+    throw new Error(
+      "R2 storage is not configured. Set R2_ENDPOINT, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY."
+    );
+  }
+
+  _s3Client = new S3Client({
+    region: "auto",
+    endpoint,
+    credentials: { accessKeyId, secretAccessKey },
+  });
+
+  return _s3Client;
+}
+
+function getBucket(): string {
+  const bucket = process.env.R2_BUCKET_NAME;
+  if (!bucket) {
+    throw new Error("R2_BUCKET_NAME is not configured.");
+  }
+  return bucket;
+}
 
 function buildKey(orgId: string, filename: string): string {
   const id = randomUUID();
@@ -30,9 +51,9 @@ export async function uploadFile(
 ): Promise<{ fileKey: string; fileSize: number }> {
   const fileKey = buildKey(orgId, metadata.filename);
 
-  await s3Client.send(
+  await getS3Client().send(
     new PutObjectCommand({
-      Bucket: BUCKET,
+      Bucket: getBucket(),
       Key: fileKey,
       Body: file,
       ContentType: metadata.contentType,
@@ -54,9 +75,9 @@ export async function downloadFile(
     throw new Error("Access denied: file does not belong to this organization");
   }
 
-  const response = await s3Client.send(
+  const response = await getS3Client().send(
     new GetObjectCommand({
-      Bucket: BUCKET,
+      Bucket: getBucket(),
       Key: fileKey,
     })
   );
@@ -72,9 +93,9 @@ export async function deleteFile(
     throw new Error("Access denied: file does not belong to this organization");
   }
 
-  await s3Client.send(
+  await getS3Client().send(
     new DeleteObjectCommand({
-      Bucket: BUCKET,
+      Bucket: getBucket(),
       Key: fileKey,
     })
   );
@@ -90,9 +111,9 @@ export async function getSignedUrl(
   }
 
   const command = new GetObjectCommand({
-    Bucket: BUCKET,
+    Bucket: getBucket(),
     Key: fileKey,
   });
 
-  return awsGetSignedUrl(s3Client, command, { expiresIn });
+  return awsGetSignedUrl(getS3Client(), command, { expiresIn });
 }

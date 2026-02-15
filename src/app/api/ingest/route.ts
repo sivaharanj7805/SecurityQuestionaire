@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { z } from "zod";
 import { ingestDocument } from "@/lib/rag/ingest";
+import { checkRateLimit, rateLimitHeaders } from "@/lib/rate-limit";
 
 const ingestSchema = z.object({
   documentId: z.string().uuid(),
@@ -15,6 +16,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: "Unauthorized. Please select an organization." },
         { status: 401 }
+      );
+    }
+
+    const rateLimit = await checkRateLimit("ingest", orgId);
+    if (rateLimit && !rateLimit.success) {
+      return NextResponse.json(
+        { error: "Too many ingestion requests. Please wait." },
+        { status: 429, headers: rateLimitHeaders(rateLimit) }
       );
     }
 

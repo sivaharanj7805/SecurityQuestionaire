@@ -4,6 +4,7 @@ import { auth } from "@clerk/nextjs/server";
 import { db } from "@/lib/db";
 import { questionnaires, questions } from "@/lib/db/schema";
 import { eq, and, desc, count } from "drizzle-orm";
+import { resolveUserId } from "@/lib/users";
 
 export async function createQuestionnaire(data: {
   name: string;
@@ -18,6 +19,9 @@ export async function createQuestionnaire(data: {
   const { userId, orgId } = await auth();
   if (!userId || !orgId) throw new Error("Unauthorized");
 
+  const internalUserId = await resolveUserId(userId);
+  if (!internalUserId) throw new Error("User not found. Please complete onboarding first.");
+
   const [questionnaire] = await db
     .insert(questionnaires)
     .values({
@@ -27,7 +31,7 @@ export async function createQuestionnaire(data: {
       status: "draft",
       questionCount: data.questions.length,
       completedCount: 0,
-      createdBy: userId,
+      createdBy: internalUserId,
     })
     .returning();
 
@@ -125,25 +129,26 @@ export async function deleteQuestionnaire(questionnaireId: string) {
   const { orgId } = await auth();
   if (!orgId) throw new Error("No organization selected");
 
-  // Delete questions first
-  await db
-    .delete(questions)
-    .where(
-      and(
-        eq(questions.questionnaireId, questionnaireId),
-        eq(questions.orgId, orgId)
-      )
-    );
+  // Delete questions + questionnaire in a transaction
+  await db.transaction(async (tx) => {
+    await tx
+      .delete(questions)
+      .where(
+        and(
+          eq(questions.questionnaireId, questionnaireId),
+          eq(questions.orgId, orgId)
+        )
+      );
 
-  // Delete questionnaire
-  await db
-    .delete(questionnaires)
-    .where(
-      and(
-        eq(questionnaires.id, questionnaireId),
-        eq(questionnaires.orgId, orgId)
-      )
-    );
+    await tx
+      .delete(questionnaires)
+      .where(
+        and(
+          eq(questionnaires.id, questionnaireId),
+          eq(questionnaires.orgId, orgId)
+        )
+      );
+  });
 
   return { success: true };
 }

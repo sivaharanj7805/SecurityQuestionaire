@@ -79,14 +79,7 @@ export async function ingestDocument(
     const chunkTexts = docChunks.map((c) => c.text);
     const { embeddings, tokensUsed } = await generateEmbeddings(chunkTexts);
 
-    // 6. Delete any existing chunks for this document (re-processing case)
-    await db
-      .delete(chunks)
-      .where(
-        and(eq(chunks.documentId, documentId), eq(chunks.orgId, orgId))
-      );
-
-    // 7. Insert chunks into DB
+    // 6. Delete old chunks + insert new ones in a transaction
     const chunkValues = docChunks.map((chunk, index) => ({
       orgId,
       documentId,
@@ -96,12 +89,21 @@ export async function ingestDocument(
       chunkIndex: chunk.metadata.chunkIndex,
     }));
 
-    // Insert in batches of 50 to avoid oversized queries
-    const BATCH_SIZE = 50;
-    for (let i = 0; i < chunkValues.length; i += BATCH_SIZE) {
-      const batch = chunkValues.slice(i, i + BATCH_SIZE);
-      await db.insert(chunks).values(batch);
-    }
+    await db.transaction(async (tx) => {
+      // Delete any existing chunks for this document (re-processing case)
+      await tx
+        .delete(chunks)
+        .where(
+          and(eq(chunks.documentId, documentId), eq(chunks.orgId, orgId))
+        );
+
+      // Insert in batches of 50 to avoid oversized queries
+      const BATCH_SIZE = 50;
+      for (let i = 0; i < chunkValues.length; i += BATCH_SIZE) {
+        const batch = chunkValues.slice(i, i + BATCH_SIZE);
+        await tx.insert(chunks).values(batch);
+      }
+    });
 
     // 8. Update document status to ready with chunk count
     await db

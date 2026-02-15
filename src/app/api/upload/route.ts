@@ -4,10 +4,10 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { documents } from "@/lib/db/schema";
 import { uploadFile } from "@/lib/storage/r2";
-import { ingestDocument } from "@/lib/rag/ingest";
 import { enforceLimit, PlanLimitError } from "@/lib/billing/enforce";
 import { logAudit } from "@/lib/audit";
-import { rateLimit, rateLimitHeaders } from "@/lib/rate-limit";
+import { checkRateLimit, rateLimitHeaders } from "@/lib/rate-limit";
+import { resolveUserId } from "@/lib/users";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -72,12 +72,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Rate limit: 20 uploads per minute per org
-    const rl = rateLimit(`upload:${orgId}`, { maxRequests: 20, windowMs: 60_000 });
-    if (!rl.success) {
+    const rateLimit = await checkRateLimit("upload", orgId);
+    if (rateLimit && !rateLimit.success) {
       return NextResponse.json(
-        { error: "Too many uploads. Please try again later." },
-        { status: 429, headers: rateLimitHeaders(rl) }
+        { error: "Too many uploads. Please wait before uploading more files." },
+        { status: 429, headers: rateLimitHeaders(rateLimit) }
       );
     }
 
@@ -139,6 +138,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Resolve Clerk userId to internal user UUID
+    const internalUserId = await resolveUserId(userId);
+    if (!internalUserId) {
+      return NextResponse.json(
+        { error: "User not found. Please complete onboarding first." },
+        { status: 403 }
+      );
+    }
+
     const { fileKey, fileSize } = await uploadFile(orgId, buffer, {
       filename: sanitizedFilename,
       contentType: file.type,
@@ -153,25 +161,23 @@ export async function POST(request: NextRequest) {
         fileType: resolvedType,
         fileSize,
         status: "processing",
-        uploadedBy: userId,
+        uploadedBy: internalUserId,
       })
       .returning();
 
     // Log audit
     await logAudit({
       orgId,
-      userId,
+      userId: internalUserId,
       action: "document_uploaded",
       resourceType: "document",
       resourceId: document.id,
       details: { filename: sanitizedFilename, fileType: resolvedType, fileSize },
     });
 
-    // Fire-and-forget ingestion — don't block the upload response
-    ingestDocument(orgId, document.id).catch((err) => {
-      console.error(`Background ingestion failed for ${document.id}:`, err);
-    });
-
+    // Return document ID immediately. The frontend calls POST /api/ingest
+    // with { documentId } to trigger ingestion as a separate request
+    // (runs synchronously within the 60s serverless timeout).
     return NextResponse.json({
       id: document.id,
       filename: document.filename,

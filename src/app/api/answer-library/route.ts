@@ -111,6 +111,15 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
+    // Validate id is a UUID
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(entryId)) {
+      return NextResponse.json(
+        { error: "Invalid id format" },
+        { status: 400 }
+      );
+    }
+
     await deleteLibraryEntry(entryId);
     return NextResponse.json({ success: true });
   } catch (error) {

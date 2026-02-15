@@ -35,7 +35,7 @@ export function generateExcelExport(
     { wch: 12 },  // Status
   ];
 
-  XLSX.utils.book_append_sheet(workbook, worksheet, "Questionnaire");
+  XLSX.utils.book_append_sheet(workbook, worksheet, questionnaireName.slice(0, 31) || "Questionnaire");
 
   const buffer = XLSX.write(workbook, {
     type: "buffer",
